@@ -152,8 +152,8 @@ SCREEN_PAD = 6
 # any turn drops it back to the floor. A straight therefore gets faster the
 # longer it stays straight. That is where smoothness on the straights comes from
 # -- geometry, not the Q-table.
-FORWARD_SPEED_MIN = 100    # mm/s -- a single forward step after a turn
-FORWARD_SPEED_MAX = 180    # mm/s -- ceiling after a long straight
+FORWARD_SPEED_MIN = 50     # mm/s -- a single forward step after a turn
+FORWARD_SPEED_MAX = 140    # mm/s -- ceiling after a long straight
 FORWARD_RAMP = 5           # mm/s added per consecutive forward step
 FORWARD_MS = 250           # duration of one forward step
 
@@ -171,8 +171,8 @@ FORWARD_MS = 250           # duration of one forward step
 # over-rotate on a straight. It is also what makes the side belief trustworthy,
 # because every turn now ends on a real band transition rather than on noise.
 TURN_SPEED = 10            # mm/s of creep while turning -- nearly a pivot
-TURN_RATE = 110            # deg/s
-TURN_SLICE_MS = 100        # how often the band is re-checked during a turn
+TURN_RATE = 60             # deg/s -- slow enough not to jump the thin EDGE band
+TURN_SLICE_MS = 20         # how often the band is re-checked during a turn
 TURN_MAX_DEG = 200         # safety: give up rather than spin forever
 
 REVERSE_SPEED = 85         # mm/s backward
@@ -492,12 +492,22 @@ forward_speed = FORWARD_SPEED_MIN
 
 
 def do_forward():
-    """Accelerating straight; the ramp carries over between consecutive steps."""
+    """Accelerating straight; the ramp carries over between consecutive steps.
+
+    Ends early the moment the sensor leaves the EDGE band, so a drift is
+    corrected after a few millimetres instead of a whole blind 250 ms step.
+    """
     global forward_speed
     forward_speed = min(max(FORWARD_SPEED_MIN, forward_speed) + FORWARD_RAMP,
                         FORWARD_SPEED_MAX)
     robot.drive(forward_speed, 0)
-    interruptible_wait(FORWARD_MS)
+    watch = StopWatch()
+    watch.reset()
+    while watch.time() < FORWARD_MS:
+        check_pause()
+        wait(15)
+        if band_of(read_reflection()) != EDGE:
+            return
 
 
 def do_turn(action, band):
