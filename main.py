@@ -148,7 +148,7 @@ SCREEN_PAD = 6
 # ---- Forward ------------------------------------------------------------
 # One constant speed. Kept low so going from a turn into a straight does not
 # jerk -- geometry, not the Q-table.
-FORWARD_SPEED = 50         # mm/s
+FORWARD_SPEED = 55         # mm/s
 FORWARD_MS = 250           # max duration of one forward step
 
 # ---- Turns are CLOSED-LOOP MACRO-ACTIONS --------------------------------
