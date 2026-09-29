@@ -658,27 +658,12 @@ def find_line():
 
 
 def avoid_obstacle(side):
-    """Detour around an obstacle, then hand back to find_line().
-
-    Turns AWAY from the tape so the detour does not drag the robot across it --
-    which way that is, is exactly what tape_side already knows.
-    """
+    """Turn around when an obstacle is detected, then resume the main loop."""
     halt()
     ev3.speaker.beep(800, 100)
-
-    away = 1 if side == SIDE_LEFT else -1
-
-    interruptible_straight(-DETOUR_BACK_MM)
-    interruptible_turn(away * DETOUR_TURN_DEG)
-    interruptible_straight(DETOUR_SIDE_MM)
-    interruptible_turn(-away * DETOUR_TURN_DEG)
-    interruptible_straight(DETOUR_PAST_MM)
-    interruptible_turn(-away * DETOUR_TURN_DEG)
-
-    found = find_line()
-    halt()
-    ev3.speaker.beep(1200 if found else 400, 150)
-    return found
+    interruptible_turn(180)
+    ev3.speaker.beep(1200, 150)
+    return True
 
 
 # ---------- Calibration routine ----------
