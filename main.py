@@ -88,7 +88,7 @@ recorded here so nobody has to reverse-engineer it from the JSON.
 
 from pybricks.ev3devices import ColorSensor, InfraredSensor, Motor
 from pybricks.hubs import EV3Brick
-from pybricks.media.ev3dev import Font
+from pybricks.media.ev3dev import Font, SoundFile
 from pybricks.parameters import Button, Direction, Port
 from pybricks.robotics import DriveBase
 from pybricks.tools import StopWatch, wait
@@ -584,13 +584,18 @@ def interruptible_straight(distance_mm):
         halt()
 
 
-def interruptible_turn(angle_deg):
+def interruptible_turn(angle_deg, sound=None):
+    """Spin in place by angle_deg. If sound is given it plays DURING the turn:
+    drive() is non-blocking, so the motors keep turning while play_file blocks,
+    and the angle loop below picks up wherever the turn got to."""
     if abs(angle_deg) < 1:
         return
     rate = TURN_RATE if angle_deg > 0 else -TURN_RATE
     start = robot.angle()
     robot.drive(0, rate)
     try:
+        if sound is not None:
+            ev3.speaker.play_file(sound)
         while abs(robot.angle() - start) < abs(angle_deg):
             check_pause()
             wait(10)
@@ -658,12 +663,17 @@ def find_line():
 
 
 def avoid_obstacle(side):
-    """Turn around when an obstacle is detected, then resume the main loop."""
+    """Turn around AWAY from the tape, then resume the main loop.
+
+    Positive angles turn right. With the tape on the right we spin left, so the
+    sensor sweeps over open floor instead of dragging across the tape body, and
+    vice versa. A 180 puts the tape on the opposite side, so the flipped side
+    is returned as the new belief.
+    """
     halt()
-    ev3.speaker.beep(800, 100)
-    interruptible_turn(180)
-    ev3.speaker.beep(1200, 150)
-    return True
+    interruptible_turn(-180 if side == SIDE_RIGHT else 180,
+                       sound=SoundFile.ELEPHANT_CALL)
+    return SIDE_LEFT if side == SIDE_RIGHT else SIDE_RIGHT
 
 
 # ---------- Calibration routine ----------
@@ -808,12 +818,10 @@ try:
 
             # Obstacle handling sits entirely outside the RL loop.
             if obstacle_ahead():
-                avoid_obstacle(tape_side)
-                # The detour rotated the robot and find_line() re-acquired an
-                # edge that need not be the one we left, so the side belief is
-                # now stale. Re-measure it instead of carrying a guess -- the
-                # reference flips its belief outright here for the same reason,
-                # but a probe answers the question rather than assuming it.
+                tape_side = avoid_obstacle(tape_side)
+                # The 180 flipped which side the tape is on, and avoid_obstacle
+                # returns that flipped belief. Still confirm it with a probe --
+                # the flip is the prior, the probe answers the question.
                 tape_side = probe_tape_side(tape_side)
                 resync()
                 continue
