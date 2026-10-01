@@ -42,11 +42,10 @@ line with the program that produced them. Each is load-bearing:
    fixed steps. One macro-turn crosses it in a single action that ends, by
    construction, on the far boundary.
 
-2. FORWARD ACCELERATES.
-   Consecutive forward steps ramp FORWARD_SPEED_MIN -> FORWARD_SPEED_MAX, and any
-   turn drops the ramp back to the floor. Long straights are fast, corners are
-   approached slowly. That is the 15 smoothness marks, and it is geometry rather
-   than anything in the Q-table.
+2. FORWARD IS ONE CONSTANT SPEED.
+   Every forward step drives at FORWARD_SPEED, close to the turn speed, so there
+   is no speed jump between turning and driving straight. That is where the
+   smoothness comes from, and it is geometry rather than anything in the Q-table.
 
 3. THE SIDE BELIEF MOVES ONLY ON A REAL BAND CROSSING.
    The old rule flipped on the SIGN of any reflection change larger than 3. On a
@@ -89,7 +88,7 @@ recorded here so nobody has to reverse-engineer it from the JSON.
 
 from pybricks.ev3devices import ColorSensor, InfraredSensor, Motor
 from pybricks.hubs import EV3Brick
-from pybricks.media.ev3dev import Font
+from pybricks.media.ev3dev import Font, SoundFile
 from pybricks.parameters import Button, Direction, Port
 from pybricks.robotics import DriveBase
 from pybricks.tools import StopWatch, wait
@@ -146,16 +145,11 @@ CALIBRATION_MIN_GAP = 3             # edge must sit this far inside black..white
 # ---- Screen -------------------------------------------------------------
 SCREEN_PAD = 6
 
-# ---- Forward ACCELERATES ------------------------------------------------
-# Forward is not a fixed nudge. Each consecutive forward step starts from the
-# speed already being driven, adds FORWARD_RAMP, and clamps into the band below;
-# any turn drops it back to the floor. A straight therefore gets faster the
-# longer it stays straight. That is where smoothness on the straights comes from
-# -- geometry, not the Q-table.
-FORWARD_SPEED_MIN = 100    # mm/s -- a single forward step after a turn
-FORWARD_SPEED_MAX = 180    # mm/s -- ceiling after a long straight
-FORWARD_RAMP = 5           # mm/s added per consecutive forward step
-FORWARD_MS = 250           # duration of one forward step
+# ---- Forward ------------------------------------------------------------
+# One constant speed. Kept low so going from a turn into a straight does not
+# jerk -- geometry, not the Q-table.
+FORWARD_SPEED = 55         # mm/s
+FORWARD_MS = 250           # max duration of one forward step
 
 # ---- Turns are CLOSED-LOOP MACRO-ACTIONS --------------------------------
 # A turn runs UNTIL THE BAND CHANGES, not for a fixed time. It is re-issued in
@@ -171,8 +165,8 @@ FORWARD_MS = 250           # duration of one forward step
 # over-rotate on a straight. It is also what makes the side belief trustworthy,
 # because every turn now ends on a real band transition rather than on noise.
 TURN_SPEED = 10            # mm/s of creep while turning -- nearly a pivot
-TURN_RATE = 110            # deg/s
-TURN_SLICE_MS = 100        # how often the band is re-checked during a turn
+TURN_RATE = 60             # deg/s -- slow enough not to jump the thin EDGE band
+TURN_SLICE_MS = 20         # how often the band is re-checked during a turn
 TURN_MAX_DEG = 200         # safety: give up rather than spin forever
 
 REVERSE_SPEED = 85         # mm/s backward
@@ -488,16 +482,20 @@ def reward_for(band):
 
 # ---------- Motion ----------
 
-forward_speed = FORWARD_SPEED_MIN
-
-
 def do_forward():
-    """Accelerating straight; the ramp carries over between consecutive steps."""
-    global forward_speed
-    forward_speed = min(max(FORWARD_SPEED_MIN, forward_speed) + FORWARD_RAMP,
-                        FORWARD_SPEED_MAX)
-    robot.drive(forward_speed, 0)
-    interruptible_wait(FORWARD_MS)
+    """Constant-speed straight.
+
+    Ends early the moment the sensor leaves the EDGE band, so a drift is
+    corrected after a few millimetres instead of a whole blind 250 ms step.
+    """
+    robot.drive(FORWARD_SPEED, 0)
+    watch = StopWatch()
+    watch.reset()
+    while watch.time() < FORWARD_MS:
+        check_pause()
+        wait(15)
+        if band_of(read_reflection()) != EDGE:
+            return
 
 
 def do_turn(action, band):
@@ -506,9 +504,6 @@ def do_turn(action, band):
     Never calls halt(): motion stays continuous into whatever comes next, which
     is where the smoothness marks live.
     """
-    global forward_speed
-    forward_speed = FORWARD_SPEED_MIN          # a turn cancels the straight ramp
-
     rate = TURN_RATE if action == RIGHT else -TURN_RATE
     start = robot.angle()
     robot.drive(TURN_SPEED, rate)
@@ -522,8 +517,6 @@ def do_turn(action, band):
 
 
 def do_reverse():
-    global forward_speed
-    forward_speed = FORWARD_SPEED_MIN
     robot.drive(-REVERSE_SPEED, 0)
     interruptible_wait(REVERSE_MS)
 
@@ -591,13 +584,18 @@ def interruptible_straight(distance_mm):
         halt()
 
 
-def interruptible_turn(angle_deg):
+def interruptible_turn(angle_deg, sound=None):
+    """Spin in place by angle_deg. If sound is given it plays DURING the turn:
+    drive() is non-blocking, so the motors keep turning while play_file blocks,
+    and the angle loop below picks up wherever the turn got to."""
     if abs(angle_deg) < 1:
         return
     rate = TURN_RATE if angle_deg > 0 else -TURN_RATE
     start = robot.angle()
     robot.drive(0, rate)
     try:
+        if sound is not None:
+            ev3.speaker.play_file(sound)
         while abs(robot.angle() - start) < abs(angle_deg):
             check_pause()
             wait(10)
@@ -665,12 +663,17 @@ def find_line():
 
 
 def avoid_obstacle(side):
-    """Turn around when an obstacle is detected, then resume the main loop."""
+    """Turn around AWAY from the tape, then resume the main loop.
+
+    Positive angles turn right. With the tape on the right we spin left, so the
+    sensor sweeps over open floor instead of dragging across the tape body, and
+    vice versa. A 180 puts the tape on the opposite side, so the flipped side
+    is returned as the new belief.
+    """
     halt()
-    ev3.speaker.beep(800, 100)
-    interruptible_turn(180)
-    ev3.speaker.beep(1200, 150)
-    return True
+    interruptible_turn(-180 if side == SIDE_RIGHT else 180,
+                       sound=SoundFile.ELEPHANT_CALL)
+    return SIDE_LEFT if side == SIDE_RIGHT else SIDE_RIGHT
 
 
 # ---------- Calibration routine ----------
@@ -815,12 +818,10 @@ try:
 
             # Obstacle handling sits entirely outside the RL loop.
             if obstacle_ahead():
-                avoid_obstacle(tape_side)
-                # The detour rotated the robot and find_line() re-acquired an
-                # edge that need not be the one we left, so the side belief is
-                # now stale. Re-measure it instead of carrying a guess -- the
-                # reference flips its belief outright here for the same reason,
-                # but a probe answers the question rather than assuming it.
+                tape_side = avoid_obstacle(tape_side)
+                # The 180 flipped which side the tape is on, and avoid_obstacle
+                # returns that flipped belief. Still confirm it with a probe --
+                # the flip is the prior, the probe answers the question.
                 tape_side = probe_tape_side(tape_side)
                 resync()
                 continue
